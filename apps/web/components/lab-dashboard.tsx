@@ -7,7 +7,7 @@ import type {
   RunRecord,
   RunResult,
 } from "@llm-lab/contracts";
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { TraceMatrix } from "@/components/trace-matrix";
 import { api, subscribeToRun } from "@/lib/api";
@@ -45,6 +45,7 @@ export function LabDashboard() {
   const [streamedText, setStreamedText] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const lastSequence = useRef(0);
 
   const refreshRuns = useCallback(async () => {
     const nextRuns = await api.runs();
@@ -62,11 +63,14 @@ export function LabDashboard() {
   }, []);
 
   const loadRun = useCallback(async (run: RunRecord) => {
+    lastSequence.current = 0;
+    setEvents([]);
     setActiveRun(run);
     setStreamedText(run.output_text ?? "");
     setResult(null);
     setError(null);
     const history = await api.events(run.id);
+    lastSequence.current = history.at(-1)?.sequence ?? 0;
     setEvents(history);
     if (run.status === "completed") {
       setResult(await api.result(run.id));
@@ -75,11 +79,11 @@ export function LabDashboard() {
 
   useEffect(() => {
     if (!activeRun || terminalStatuses.has(activeRun.status)) return;
-    const lastSequence = events.at(-1)?.sequence ?? 0;
     return subscribeToRun(
       activeRun.id,
-      lastSequence,
+      lastSequence.current,
       (event) => {
+        lastSequence.current = Math.max(lastSequence.current, event.sequence);
         setEvents((current) =>
           current.some((item) => item.sequence === event.sequence)
             ? current
@@ -102,7 +106,7 @@ export function LabDashboard() {
       },
       () => setError("The live event stream disconnected."),
     );
-  }, [activeRun, events]);
+  }, [activeRun]);
 
   async function submitRun(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -110,6 +114,7 @@ export function LabDashboard() {
     setError(null);
     setResult(null);
     setEvents([]);
+    lastSequence.current = 0;
     setStreamedText("");
     try {
       const created = await api.createRun(request);

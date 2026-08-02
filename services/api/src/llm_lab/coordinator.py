@@ -60,6 +60,7 @@ class RunCoordinator:
         self.events = EventBus(repository)
         self._queue: asyncio.Queue[tuple[str, CreateRunRequest]] = asyncio.Queue()
         self._cancelled: set[str] = set()
+        self._active_run_id: str | None = None
         self._worker_task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
@@ -92,7 +93,7 @@ class RunCoordinator:
             raise KeyError(run_id)
         if record.status.terminal:
             return record
-        if record.status not in {RunStatus.QUEUED, RunStatus.LOADING}:
+        if record.status is not RunStatus.QUEUED or self._active_run_id == run_id:
             raise RuntimeError("A running model call cannot yet be interrupted safely")
         self._cancelled.add(run_id)
         record = await asyncio.to_thread(self.repository.update_run, run_id, RunStatus.CANCELLED)
@@ -105,8 +106,10 @@ class RunCoordinator:
             try:
                 if run_id in self._cancelled:
                     continue
+                self._active_run_id = run_id
                 await self._execute(run_id, request)
             finally:
+                self._active_run_id = None
                 self._cancelled.discard(run_id)
                 self._queue.task_done()
 

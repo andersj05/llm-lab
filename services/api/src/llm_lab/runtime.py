@@ -73,7 +73,10 @@ class ModelRuntime:
             import jlens  # noqa: F401
         except ImportError:
             return False, "Install the Anthropic jacobian-lens reference package"
-        return True, None
+        return (
+            False,
+            "The fitted lens was found, but the J-lens execution adapter is not enabled yet",
+        )
 
     def _load(self) -> tuple[Any, Any, Any]:
         with self._load_lock:
