@@ -62,7 +62,11 @@ def test_run_completes_and_emits_events(tmp_path: Path) -> None:
                 break
             sleep(0.01)
 
-        events = client.get(f"/api/v1/runs/{run_id}/events").json()
+        for _ in range(50):
+            events = client.get(f"/api/v1/runs/{run_id}/events").json()
+            if events and events[-1]["type"] == "run.completed":
+                break
+            sleep(0.01)
 
     assert created.status_code == 202
     assert record["output_text"] == "workspace"
