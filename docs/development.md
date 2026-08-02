@@ -46,3 +46,14 @@ make check
 
 CI runs the same lint, type-check, test, and build checks without loading model
 weights or requiring a GPU.
+
+## CI and dependency updates
+
+GitHub Actions runs independent API and web jobs on pushes to `main`, `dev`,
+`feat/**`, and `fix/**`, and on pull requests into `main` or `dev`. The API job
+installs only control-plane and test dependencies; it never downloads PyTorch or
+model weights. The web job uses the committed npm lockfile and produces a full
+Next.js production build.
+
+Dependabot targets dependency updates at `dev` so automated updates follow the
+same integration path as feature work.
