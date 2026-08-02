@@ -25,6 +25,7 @@ check-api:
 	uv run --frozen pytest
 
 check-web:
+	npm audit --audit-level=high
 	npm run lint:web
 	npm run typecheck:web
 	npm run test:web
