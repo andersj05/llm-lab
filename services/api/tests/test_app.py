@@ -52,6 +52,20 @@ class StoppableRuntime(FakeRuntime):
         )
 
 
+class NonFiniteRuntime(FakeRuntime):
+    def generate(
+        self,
+        request: CreateRunRequest,
+        on_text: Callable[[str], None],
+        should_stop: Callable[[], bool] | None = None,
+    ) -> GenerationResult:
+        return GenerationResult(
+            output_text="safe",
+            tokens=[TokenTrace(index=0, token_id=1, text="safe", logprob=None)],
+            trace_summary={"legacy_non_finite": float("-inf")},
+        )
+
+
 def settings(tmp_path: Path) -> Settings:
     return Settings(
         model_path=tmp_path / "model",
@@ -118,6 +132,25 @@ def test_completed_run_and_artifacts_can_be_deleted(tmp_path: Path) -> None:
         assert deleted.json() == {"id": run_id, "deleted": True}
         assert client.get(f"/api/v1/runs/{run_id}").status_code == 404
         assert not (configured.data_dir / run_id).exists()
+
+
+def test_result_endpoint_returns_strict_json_for_diagnostics(tmp_path: Path) -> None:
+    configured = settings(tmp_path)
+    with TestClient(create_app(configured, NonFiniteRuntime())) as client:
+        created = client.post("/api/v1/runs", json={"prompt": "Inspect this"})
+        run_id = created.json()["id"]
+        for _ in range(50):
+            record = client.get(f"/api/v1/runs/{run_id}").json()
+            if record["status"] == "completed":
+                break
+            sleep(0.01)
+
+        result = client.get(f"/api/v1/runs/{run_id}/result")
+        artifact_text = (configured.data_dir / run_id / "result.json").read_text()
+
+    assert result.status_code == 200
+    assert result.json()["traces"]["legacy_non_finite"] is None
+    assert "Infinity" not in artifact_text
 
 
 def test_running_run_can_be_stopped_before_deletion(tmp_path: Path) -> None:

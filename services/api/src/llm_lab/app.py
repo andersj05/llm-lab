@@ -91,6 +91,15 @@ def create_app(settings: Settings | None = None, runtime: Runtime | None = None)
             raise HTTPException(status_code=404, detail="Run not found")
         return await _in_thread(repository.list_events, run_id, after)
 
+    @app.get("/api/v1/runs/{run_id}/result")
+    async def get_run_result(run_id: str) -> dict[str, Any]:
+        if await _in_thread(repository.get_run, run_id) is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        result = await _in_thread(artifacts.read_json, run_id, "result.json")
+        if not isinstance(result, dict):
+            raise HTTPException(status_code=404, detail="Run result is not ready")
+        return result
+
     @app.post("/api/v1/runs/{run_id}/cancel", response_model=RunRecord)
     async def cancel_run(run_id: str) -> RunRecord:
         try:

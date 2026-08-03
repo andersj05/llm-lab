@@ -45,7 +45,7 @@ export const api = {
   deleteRun: (runId: string) =>
     request<DeleteRunResponse>(`/runs/${runId}`, { method: "DELETE" }),
   result: (runId: string) =>
-    request<RunResult>(`/runs/${runId}/artifacts/result.json`),
+    request<RunResult>(`/runs/${runId}/result`),
 };
 
 export function subscribeToRun(

@@ -275,8 +275,11 @@ class ModelRuntime:
             alternatives: list[dict[str, int | float | str]] = []
             if scores is not None and index < len(scores):
                 log_probs = torch.log_softmax(scores[index][0].float(), dim=-1)
-                logprob = float(log_probs[token_id].item())
-                values, ids = torch.topk(log_probs, k=5)
+                selected_logprob = log_probs[token_id]
+                if torch.isfinite(selected_logprob):
+                    logprob = float(selected_logprob.item())
+                finite_count = int(torch.isfinite(log_probs).sum().item())
+                values, ids = torch.topk(log_probs, k=min(5, finite_count))
                 alternatives = [
                     {
                         "token_id": int(candidate_id),

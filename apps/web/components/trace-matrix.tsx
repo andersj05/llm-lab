@@ -9,11 +9,19 @@ interface TraceMatrixProps {
   tokens?: string[];
   residualUpdates?: number[][];
   residualNorms?: number[][];
+  emptyTitle?: string;
+  emptyMessage?: string;
 }
 
 type HeatStyle = CSSProperties & { "--heat": number };
 
-export function TraceMatrix({ tokens, residualUpdates, residualNorms }: TraceMatrixProps) {
+export function TraceMatrix({
+  tokens,
+  residualUpdates,
+  residualNorms,
+  emptyTitle = "No activation data",
+  emptyMessage = "Enable Activations before starting the run.",
+}: TraceMatrixProps) {
   const [mode, setMode] = useState<"updates" | "norms">("updates");
   const values = mode === "updates" ? residualUpdates : residualNorms;
 
@@ -22,8 +30,8 @@ export function TraceMatrix({ tokens, residualUpdates, residualNorms }: TraceMat
       <div className="empty-trace">
         <span className="empty-trace__mark">—</span>
         <div>
-          <strong>No activation data</strong>
-          <p>Enable activations to capture the final layer-by-token window.</p>
+          <strong>{emptyTitle}</strong>
+          <p>{emptyMessage}</p>
         </div>
       </div>
     );

@@ -9,8 +9,9 @@ import type {
 } from "@llm-lab/contracts";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { TraceMatrix } from "@/components/trace-matrix";
 import { JSpaceViewer } from "@/components/jspace-viewer";
+import { ReasoningWorkspace } from "@/components/reasoning-workspace";
+import { TraceMatrix } from "@/components/trace-matrix";
 import { api, subscribeToRun } from "@/lib/api";
 import { formatBytes, formatTimestamp } from "@/lib/format";
 
@@ -19,6 +20,15 @@ const terminalStatuses = new Set<RunRecord["status"]>([
   "failed",
   "cancelled",
 ]);
+
+type DiagnosticState =
+  | "no-run"
+  | "not-requested"
+  | "waiting"
+  | "loading"
+  | "ready"
+  | "unavailable"
+  | "error";
 
 const initialRequest: CreateRunRequest = {
   prompt: "",
@@ -41,6 +51,7 @@ const initialRequest: CreateRunRequest = {
 };
 
 export function LabDashboard() {
+  const [activeTab, setActiveTab] = useState<"diagnostics" | "reasoning">("diagnostics");
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [activeRun, setActiveRun] = useState<RunRecord | null>(null);
@@ -53,7 +64,12 @@ export function LabDashboard() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [clearingHistory, setClearingHistory] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [resultStatus, setResultStatus] = useState<"idle" | "loading" | "ready" | "error">(
+    "idle",
+  );
+  const [resultError, setResultError] = useState<string | null>(null);
   const lastSequence = useRef(0);
+  const resultRequest = useRef(0);
 
   const refreshRuns = useCallback(async () => {
     const nextRuns = await api.runs();
@@ -61,10 +77,31 @@ export function LabDashboard() {
     return nextRuns;
   }, []);
 
+  const fetchResult = useCallback(async (runId: string) => {
+    const requestId = resultRequest.current + 1;
+    resultRequest.current = requestId;
+    setResultStatus("loading");
+    setResultError(null);
+    try {
+      const nextResult = await api.result(runId);
+      if (resultRequest.current !== requestId) return;
+      setResult(nextResult);
+      setResultStatus("ready");
+    } catch (reason) {
+      if (resultRequest.current !== requestId) return;
+      setResult(null);
+      setResultStatus("error");
+      setResultError(reason instanceof Error ? reason.message : "Unable to load diagnostics");
+    }
+  }, []);
+
   const resetSelection = useCallback(() => {
     lastSequence.current = 0;
     setActiveRun(null);
     setResult(null);
+    setResultStatus("idle");
+    setResultError(null);
+    resultRequest.current += 1;
     setEvents([]);
     setStreamedText("");
     setError(null);
@@ -76,24 +113,31 @@ export function LabDashboard() {
     setActiveRun(run);
     setStreamedText(run.output_text ?? "");
     setResult(null);
+    setResultStatus("idle");
+    setResultError(null);
+    resultRequest.current += 1;
     setError(null);
     try {
       const history = await api.events(run.id);
       lastSequence.current = history.at(-1)?.sequence ?? 0;
       setEvents(history);
       if (run.status === "completed" || run.status === "cancelled") {
-        setResult(await api.result(run.id).catch(() => null));
+        await fetchResult(run.id);
       }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to load run");
     }
-  }, []);
+  }, [fetchResult]);
 
   useEffect(() => {
     Promise.all([api.health(), api.runs()])
       .then(([nextHealth, nextRuns]) => {
         setHealth(nextHealth);
         setRuns(nextRuns);
+        setRequest((current) => ({
+          ...current,
+          traces: { ...current.traces, jspace: nextHealth.model.jspace_available },
+        }));
         if (nextRuns[0]) void loadRun(nextRuns[0]);
       })
       .catch((reason: Error) => setError(reason.message));
@@ -121,7 +165,7 @@ export function LabDashboard() {
               setActiveRun(updated);
               setRuns(nextRuns);
               if (updated.status === "completed" || updated.status === "cancelled") {
-                setResult(await api.result(updated.id).catch(() => null));
+                await fetchResult(updated.id);
               }
             })
             .catch((reason: Error) => setError(reason.message));
@@ -129,13 +173,16 @@ export function LabDashboard() {
       },
       () => setError("The live event stream disconnected."),
     );
-  }, [activeRun]);
+  }, [activeRun, fetchResult]);
 
   async function submitRun(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSubmitting(true);
     setError(null);
     setResult(null);
+    setResultStatus("idle");
+    setResultError(null);
+    resultRequest.current += 1;
     setEvents([]);
     lastSequence.current = 0;
     setStreamedText("");
@@ -211,6 +258,15 @@ export function LabDashboard() {
     }
   }
 
+  const inspectReasoningRun = useCallback(
+    async (runId: string) => {
+      const run = await api.run(runId);
+      setActiveTab("diagnostics");
+      await loadRun(run);
+    },
+    [loadRun],
+  );
+
   const latestPhase = events.at(-1)?.type ?? activeRun?.status ?? "ready";
   const tokenTraces = useMemo(() => result?.tokens ?? [], [result]);
   const confidence = useMemo(() => {
@@ -224,6 +280,24 @@ export function LabDashboard() {
   const outputText = streamedText || activeRun?.output_text || "";
   const maxTokenLimit = Math.min(32_768, health?.model.max_context_tokens ?? 32_768);
   const finishedRunCount = runs.filter((run) => terminalStatuses.has(run.status)).length;
+  const layerDiagnostic = diagnosticLabel(
+    activeRun,
+    activeRun?.request.traces.hidden_states ?? false,
+    Boolean(result?.traces.residual_update_norms?.length),
+    resultStatus,
+  );
+  const likelihoodDiagnostic = diagnosticLabel(
+    activeRun,
+    activeRun?.request.traces.logprobs ?? false,
+    tokenTraces.some((token) => token.logprob !== null),
+    resultStatus,
+  );
+  const jspaceDiagnostic = diagnosticLabel(
+    activeRun,
+    activeRun?.request.traces.jspace ?? false,
+    Boolean(result?.traces.jspace),
+    resultStatus,
+  );
 
   return (
     <main className="app-shell">
@@ -232,6 +306,26 @@ export function LabDashboard() {
           <h1>LLM Lab</h1>
           <span>Local model workspace</span>
         </div>
+        <nav className="app-tabs" aria-label="Workspace" role="tablist">
+          <button
+            aria-selected={activeTab === "diagnostics"}
+            className={activeTab === "diagnostics" ? "is-active" : ""}
+            onClick={() => setActiveTab("diagnostics")}
+            role="tab"
+            type="button"
+          >
+            Diagnostics
+          </button>
+          <button
+            aria-selected={activeTab === "reasoning"}
+            className={activeTab === "reasoning" ? "is-active" : ""}
+            onClick={() => setActiveTab("reasoning")}
+            role="tab"
+            type="button"
+          >
+            Reasoning
+          </button>
+        </nav>
         <div className="model-status">
           <StatusDot active={health?.model.available ?? false} />
           <span>{health?.model.architecture ?? "API unavailable"}</span>
@@ -241,7 +335,7 @@ export function LabDashboard() {
         </div>
       </header>
 
-      <div className="app-body">
+      <div className="app-body" hidden={activeTab !== "diagnostics"}>
         <aside className="history-sidebar">
           <div className="history-header">
             <div>
@@ -416,8 +510,8 @@ export function LabDashboard() {
 
             <div className="composer-actions">
               <p>
-                Activation and attention capture use only the final 256-token window. Long generation
-                is no longer blocked by that limit.
+                Thinking changes the generated response; it does not enable diagnostics. Logprobs,
+                Activations, Attention, and J-space control capture independently.
               </p>
               <div className="button-group">
                 {isActive ? (
@@ -474,6 +568,32 @@ export function LabDashboard() {
             ) : null}
           </section>
 
+          <section className="panel diagnostics-overview">
+            <div className="diagnostics-overview__copy">
+              <span>Diagnostics</span>
+              <strong>
+                {activeRun ? `Run ${activeRun.id.slice(0, 8)}` : "Select or start a run"}
+              </strong>
+              <p>
+                Results load after generation finishes. Each badge distinguishes loading, missing,
+                and options that were not requested.
+              </p>
+            </div>
+            <div className="diagnostics-badges">
+              <DiagnosticBadge label="Layer activity" state={layerDiagnostic} />
+              <DiagnosticBadge label="Token likelihood" state={likelihoodDiagnostic} />
+              <DiagnosticBadge label="J-space" state={jspaceDiagnostic} />
+            </div>
+            {resultError && activeRun ? (
+              <div className="diagnostics-error">
+                <span>{resultError}</span>
+                <button onClick={() => void fetchResult(activeRun.id)} type="button">
+                  Retry diagnostics
+                </button>
+              </div>
+            ) : null}
+          </section>
+
           <section className="panel trace-panel">
             <div className="section-heading section-heading--compact">
               <div>
@@ -489,6 +609,11 @@ export function LabDashboard() {
               tokens={result?.traces.tokens}
               residualUpdates={result?.traces.residual_update_norms}
               residualNorms={result?.traces.hidden_state_norms}
+              emptyMessage={diagnosticEmptyMessage(
+                layerDiagnostic,
+                "Enable Activations before starting the run.",
+              )}
+              emptyTitle={diagnosticEmptyTitle(layerDiagnostic, "Layer activity")}
             />
           </section>
 
@@ -518,8 +643,12 @@ export function LabDashboard() {
                   ))
                 ) : (
                   <p className="empty-copy">
-                    No logprobs were captured. Budgets above 1,024 tokens skip full-vocabulary
-                    scores to keep GPU memory bounded.
+                    {diagnosticEmptyMessage(
+                      likelihoodDiagnostic,
+                      result?.generation && !result.generation.logprobs_captured
+                        ? `The ${result.generation.effective_max_new_tokens.toLocaleString()}-token budget exceeded the ${result.generation.logprob_token_limit.toLocaleString()}-token likelihood capture limit.`
+                        : "Enable Logprobs before starting the run.",
+                    )}
                   </p>
                 )}
               </div>
@@ -529,10 +658,20 @@ export function LabDashboard() {
 
           <JSpaceViewer
             available={health?.model.jspace_available ?? false}
+            loading={resultStatus === "loading"}
             reason={health?.model.jspace_reason}
+            requested={activeRun?.request.traces.jspace ?? false}
+            resultError={resultError}
             summary={result?.traces.jspace}
           />
         </section>
+      </div>
+      <div className="reasoning-tab" hidden={activeTab !== "reasoning"}>
+        <ReasoningWorkspace
+          health={health}
+          onInspectRun={inspectReasoningRun}
+          onRunsChanged={refreshRuns}
+        />
       </div>
     </main>
   );
@@ -564,4 +703,57 @@ function OptionToggle({
       <span>{label}</span>
     </label>
   );
+}
+
+function DiagnosticBadge({ label, state }: { label: string; state: DiagnosticState }) {
+  return (
+    <div className={`diagnostic-badge diagnostic-badge--${state}`}>
+      <span>{label}</span>
+      <strong>{diagnosticStateCopy(state)}</strong>
+    </div>
+  );
+}
+
+function diagnosticLabel(
+  run: RunRecord | null,
+  requested: boolean,
+  ready: boolean,
+  resultStatus: "idle" | "loading" | "ready" | "error",
+): DiagnosticState {
+  if (!run) return "no-run";
+  if (ready) return "ready";
+  if (!requested) return "not-requested";
+  if (resultStatus === "loading") return "loading";
+  if (resultStatus === "error") return "error";
+  if (!terminalStatuses.has(run.status)) return "waiting";
+  return "unavailable";
+}
+
+function diagnosticStateCopy(state: DiagnosticState): string {
+  return {
+    "no-run": "No run",
+    "not-requested": "Not requested",
+    waiting: "Waiting",
+    loading: "Loading",
+    ready: "Ready",
+    unavailable: "No data",
+    error: "Load error",
+  }[state];
+}
+
+function diagnosticEmptyTitle(state: DiagnosticState, label: string): string {
+  if (state === "loading") return `Loading ${label.toLowerCase()}`;
+  if (state === "waiting") return "Waiting for the run to finish";
+  if (state === "error") return "Diagnostics could not be loaded";
+  if (state === "not-requested") return `${label} was not requested`;
+  if (state === "unavailable") return `${label} contains no usable data`;
+  return `No ${label.toLowerCase()} data`;
+}
+
+function diagnosticEmptyMessage(state: DiagnosticState, fallback: string): string {
+  if (state === "loading") return "Reading and validating the diagnostics artifact…";
+  if (state === "waiting") return "Diagnostics appear after generation and trace capture finish.";
+  if (state === "error") return "Use Retry diagnostics above to load the result again.";
+  if (state === "no-run") return "Select a completed run or start a new one.";
+  return fallback;
 }

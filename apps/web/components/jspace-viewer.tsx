@@ -7,13 +7,23 @@ import type { JSpaceSummary } from "@llm-lab/contracts";
 
 interface JSpaceViewerProps {
   available: boolean;
+  loading?: boolean;
   reason?: string | null;
+  requested?: boolean;
+  resultError?: string | null;
   summary?: JSpaceSummary;
 }
 
 type RankStyle = CSSProperties & { "--rank-heat": number };
 
-export function JSpaceViewer({ available, reason, summary }: JSpaceViewerProps) {
+export function JSpaceViewer({
+  available,
+  loading = false,
+  reason,
+  requested = false,
+  resultError,
+  summary,
+}: JSpaceViewerProps) {
   const [selection, setSelection] = useState<{
     key: string;
     layer: number;
@@ -48,15 +58,31 @@ export function JSpaceViewer({ available, reason, summary }: JSpaceViewerProps) 
             <p>Model-specific Jacobian-lens readout</p>
           </div>
           <span className={`availability-pill ${available ? "is-ready" : ""}`}>
-            {available ? "Lens ready" : "Unavailable"}
+            {loading && requested ? "Loading" : available ? "Lens ready" : "Unavailable"}
           </span>
         </div>
         <div className="jspace-empty">
-          <strong>{available ? "Enable J-space on a new run" : "A fitted lens is required"}</strong>
+          <strong>
+            {loading && requested
+              ? "Loading J-space readouts"
+              : resultError && requested
+                ? "J-space result could not be loaded"
+                : requested
+                  ? "No J-space data was stored"
+                  : available
+                    ? "J-space was not requested for this run"
+                    : "A fitted lens is required"}
+          </strong>
           <p>
-            {available
-              ? "The next run will decode the final token window into word-level concepts across model depth."
-              : reason ?? "Fit a compatible Jacobian lens for this model."}
+            {loading && requested
+              ? "The diagnostics artifact is being parsed. Large traced runs can take a moment."
+              : resultError && requested
+                ? resultError
+                : requested
+                  ? "Retry the diagnostics artifact or start a new run if capture failed."
+                  : available
+                    ? "Enable J-space before starting a new run to capture model-specific concepts."
+                    : reason ?? "Fit a compatible Jacobian lens for this model."}
           </p>
           <a
             href="https://transformer-circuits.pub/2026/workspace/index.html"
