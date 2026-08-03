@@ -12,6 +12,10 @@ def _csv(value: str) -> tuple[str, ...]:
     return tuple(item.strip() for item in value.split(",") if item.strip())
 
 
+def _bool(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     model_path: Path
@@ -24,6 +28,7 @@ class Settings:
     trace_token_limit: int
     jspace_token_limit: int = 64
     jspace_layer_stride: int = 1
+    load_in_4bit: bool = False
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -48,6 +53,7 @@ class Settings:
             trace_token_limit=int(os.getenv("LLM_LAB_TRACE_TOKEN_LIMIT", "256")),
             jspace_token_limit=int(os.getenv("LLM_LAB_JSPACE_TOKEN_LIMIT", "64")),
             jspace_layer_stride=max(1, int(os.getenv("LLM_LAB_JSPACE_LAYER_STRIDE", "1"))),
+            load_in_4bit=_bool(os.getenv("LLM_LAB_LOAD_IN_4BIT", "false")),
         )
 
 

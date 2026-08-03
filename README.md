@@ -1,9 +1,9 @@
 # LLM Lab
 
 LLM Lab is a local-first observability workbench for running open-weight language
-models in Linux and inspecting what happens across tokens and layers. The first
-supported runtime is the local Qwen3 0.6B model at
-`/home/base/ai/qwen3-0.6b/model`.
+models in Linux and inspecting what happens across tokens and layers. The configured
+runtime is Qwen3-4B-Thinking-2507, loaded in 4-bit NF4 from
+`/home/base/ai/qwen3-4b-thinking-2507/model`.
 
 The project deliberately separates four kinds of evidence:
 
@@ -63,7 +63,7 @@ J-space stays disabled until a compatible checkpoint is present.
 Then open `http://localhost:3000` from Windows. The API listens on
 `http://localhost:8000` by default.
 
-Qwen3 0.6B exposes a 40,960-token context window. LLM Lab accepts generation
+Qwen3-4B-Thinking-2507 exposes a 262,144-token context window. LLM Lab accepts generation
 budgets up to 32,768 new tokens and clamps them to the space remaining after the
 rendered prompt. Activation and attention capture remain bounded to the final
 `LLM_LAB_TRACE_TOKEN_LIMIT` tokens so a long generation is not rejected just
@@ -89,13 +89,12 @@ The application has two workspaces:
 - **Diagnostics** runs an ordinary model request and verifies the requested
   likelihood, activation, attention, and J-space artifacts independently of
   the model's Thinking setting.
-- **Reasoning** fans a problem into two to four independent model runs, then
-  sends their completed outputs to a separate synthesis run. This creates a
-  nonlinear experiment graph around the model while remaining honest that
-  each individual Qwen call is still autoregressive.
+- **Search Lab** runs iterative residual-guided experiments and renders the live
+  brainstorm, executor, and evaluator DAG together with residual convergence and
+  the candidate archive.
 
-Reasoning graph nodes are ordinary persisted runs, so any node captured with
-diagnostics enabled can be opened in the Diagnostics workspace.
+Every Search Lab node is an ordinary persisted run and can be opened in the
+Diagnostics workspace. Search state survives page refreshes under `runs/searches/`.
 
 See [docs/architecture.md](docs/architecture.md) for the component model and
 [docs/development.md](docs/development.md) for setup and branch conventions.

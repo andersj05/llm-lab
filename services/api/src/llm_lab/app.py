@@ -21,6 +21,12 @@ from llm_lab.schemas import (
     RunEvent,
     RunRecord,
 )
+from llm_lab.search import (
+    CreateSearchRequest,
+    SearchCoordinator,
+    SearchRecord,
+    SearchStore,
+)
 
 
 def create_app(settings: Settings | None = None, runtime: Runtime | None = None) -> FastAPI:
@@ -29,13 +35,17 @@ def create_app(settings: Settings | None = None, runtime: Runtime | None = None)
     artifacts = ArtifactStore(resolved_settings.data_dir)
     resolved_runtime = runtime or ModelRuntime(resolved_settings)
     coordinator = RunCoordinator(repository, artifacts, resolved_runtime)
+    search_store = SearchStore(resolved_settings.data_dir)
+    searches = SearchCoordinator(coordinator, search_store)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         repository.initialize()
         artifacts.initialize()
         await coordinator.start()
+        await searches.start()
         yield
+        await searches.stop()
         await coordinator.stop()
 
     app = FastAPI(
@@ -56,6 +66,8 @@ def create_app(settings: Settings | None = None, runtime: Runtime | None = None)
     app.state.artifacts = artifacts
     app.state.runtime = resolved_runtime
     app.state.coordinator = coordinator
+    app.state.search_store = search_store
+    app.state.searches = searches
 
     @app.get("/api/v1/health", response_model=HealthResponse)
     async def health() -> HealthResponse:
@@ -73,6 +85,29 @@ def create_app(settings: Settings | None = None, runtime: Runtime | None = None)
     @app.post("/api/v1/runs", response_model=RunRecord, status_code=202)
     async def create_run(payload: CreateRunRequest) -> RunRecord:
         return await coordinator.submit(payload)
+
+    @app.post("/api/v1/searches", response_model=SearchRecord, status_code=202)
+    async def create_search(payload: CreateSearchRequest) -> SearchRecord:
+        return await searches.submit(payload)
+
+    @app.get("/api/v1/searches", response_model=list[SearchRecord])
+    async def list_searches(limit: int = Query(default=20, ge=1, le=100)) -> list[SearchRecord]:
+        records = await _in_thread(search_store.list)
+        return records[:limit]
+
+    @app.get("/api/v1/searches/{search_id}", response_model=SearchRecord)
+    async def get_search(search_id: str) -> SearchRecord:
+        record = await _in_thread(search_store.get, search_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="Search not found")
+        return record
+
+    @app.post("/api/v1/searches/{search_id}/cancel", response_model=SearchRecord)
+    async def cancel_search(search_id: str) -> SearchRecord:
+        try:
+            return await searches.cancel(search_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Search not found") from error
 
     @app.get("/api/v1/runs", response_model=list[RunRecord])
     async def list_runs(limit: int = Query(default=50, ge=1, le=200)) -> list[RunRecord]:

@@ -34,13 +34,16 @@ inside Ubuntu while the UI is viewed in an ordinary Windows browser.
 events, query summaries, and download artifacts. It does not import model code,
 load weights, or act as the durable source of experiment data.
 
-The Reasoning workspace is currently a browser-side graph coordinator over the
-same run API. It submits independent branch nodes together, waits for their
-persisted terminal records, and creates a synthesis node from the successful
-outputs. GPU execution remains serialized by the model worker, but the search
-dependencies form a fan-out/fan-in directed acyclic graph rather than one
-monolithic generation. Closing the page does not stop already-submitted runs,
-although the graph layout itself is session state in this first version.
+The Search Lab visualizes API-owned residual-guided experiments. The search
+coordinator persists brainstorm, executor, and evaluator nodes before submitting
+their model runs, then updates queue, loading, running, and terminal states as the
+single GPU worker advances. The browser polls this durable state to draw lineage,
+residual convergence, and the candidate archive. Closing or refreshing the page
+does not stop a search or lose its graph.
+
+GPU execution remains serialized to avoid duplicate model loads and out-of-memory
+failures on the 8 GB target GPU. Branches are independent in the dependency graph
+and may be batched by a future runtime without changing the search contract.
 
 ### API and coordinator
 

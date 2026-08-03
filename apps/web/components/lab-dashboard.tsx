@@ -10,7 +10,7 @@ import type {
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { JSpaceViewer } from "@/components/jspace-viewer";
-import { ReasoningWorkspace } from "@/components/reasoning-workspace";
+import { SearchLab } from "@/components/search-lab";
 import { TraceMatrix } from "@/components/trace-matrix";
 import { api, subscribeToRun } from "@/lib/api";
 import { formatBytes, formatTimestamp } from "@/lib/format";
@@ -323,7 +323,7 @@ export function LabDashboard() {
             role="tab"
             type="button"
           >
-            Reasoning
+            Search Lab
           </button>
         </nav>
         <div className="model-status">
@@ -667,7 +667,7 @@ export function LabDashboard() {
         </section>
       </div>
       <div className="reasoning-tab" hidden={activeTab !== "reasoning"}>
-        <ReasoningWorkspace
+        <SearchLab
           health={health}
           onInspectRun={inspectReasoningRun}
           onRunsChanged={refreshRuns}

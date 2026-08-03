@@ -109,14 +109,37 @@ class ModelRuntime:
             self._tokenizer = AutoTokenizer.from_pretrained(
                 self.settings.model_path, local_files_only=True
             )
+            load_options: dict[str, Any] = {
+                "local_files_only": True,
+                "dtype": dtype,
+                "attn_implementation": "eager",
+            }
+            quantized = self.settings.load_in_4bit and device == "cuda"
+            if quantized:
+                try:
+                    from transformers import BitsAndBytesConfig
+                except ImportError as error:
+                    raise RuntimeError(
+                        "4-bit loading requires bitsandbytes; run `uv sync --extra model`"
+                    ) from error
+                compute_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+                load_options.update(
+                    quantization_config=BitsAndBytesConfig(
+                        load_in_4bit=True,
+                        bnb_4bit_quant_type="nf4",
+                        bnb_4bit_compute_dtype=compute_dtype,
+                        bnb_4bit_use_double_quant=True,
+                    ),
+                    device_map={"": 0},
+                )
             self._model = AutoModelForCausalLM.from_pretrained(
                 self.settings.model_path,
-                local_files_only=True,
-                dtype=dtype,
-                attn_implementation="eager",
-            ).to(device)
+                **load_options,
+            )
+            if not quantized:
+                self._model = self._model.to(device)
             self._model.eval()
-            self._device = device
+            self._device = f"{device}:0 (4-bit NF4)" if quantized else device
             return torch, self._model, self._tokenizer
 
     def generate(

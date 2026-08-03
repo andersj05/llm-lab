@@ -1,10 +1,12 @@
 import type {
   CreateRunRequest,
+  CreateSearchRequest,
   DeleteRunResponse,
   HealthResponse,
   RunEvent,
   RunRecord,
   RunResult,
+  SearchRecord,
 } from "@llm-lab/contracts";
 
 const API_URL = (
@@ -35,6 +37,17 @@ export const api = {
   runs: () => request<RunRecord[]>("/runs"),
   run: (runId: string) => request<RunRecord>(`/runs/${runId}`),
   events: (runId: string) => request<RunEvent[]>(`/runs/${runId}/events`),
+  searches: () => request<SearchRecord[]>("/searches"),
+  search: (searchId: string) => request<SearchRecord>(`/searches/${searchId}`),
+  createSearch: (payload: CreateSearchRequest) =>
+    request<SearchRecord>("/searches", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  cancelSearch: (searchId: string) =>
+    request<SearchRecord>(`/searches/${searchId}/cancel`, {
+      method: "POST",
+    }),
   createRun: (payload: CreateRunRequest) =>
     request<RunRecord>("/runs", {
       method: "POST",
