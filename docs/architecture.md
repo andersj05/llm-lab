@@ -34,6 +34,14 @@ inside Ubuntu while the UI is viewed in an ordinary Windows browser.
 events, query summaries, and download artifacts. It does not import model code,
 load weights, or act as the durable source of experiment data.
 
+The Reasoning workspace is currently a browser-side graph coordinator over the
+same run API. It submits independent branch nodes together, waits for their
+persisted terminal records, and creates a synthesis node from the successful
+outputs. GPU execution remains serialized by the model worker, but the search
+dependencies form a fan-out/fan-in directed acyclic graph rather than one
+monolithic generation. Closing the page does not stop already-submitted runs,
+although the graph layout itself is session state in this first version.
+
 ### API and coordinator
 
 `services/api` validates commands, persists lifecycle state, and serializes all
@@ -85,6 +93,11 @@ attentions.safetensors
 
 The initial scaffold creates metadata and event storage. Tensor and Parquet
 writers are introduced with the corresponding instrumentation adapters.
+
+Result JSON is normalized to strict RFC-compatible numbers before writing and
+again when read. This defensive boundary converts non-finite model scores to
+`null`, including legacy artifacts, so one filtered logit cannot prevent the
+browser from loading every diagnostic in the run.
 
 ## Event contract
 

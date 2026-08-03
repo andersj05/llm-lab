@@ -84,5 +84,18 @@ would contribute at the final layer. It is an experimental interpretability
 measurement, not hidden chain-of-thought or evidence that the model is
 conscious. See [docs/jspace.md](docs/jspace.md) for the method and controls.
 
+The application has two workspaces:
+
+- **Diagnostics** runs an ordinary model request and verifies the requested
+  likelihood, activation, attention, and J-space artifacts independently of
+  the model's Thinking setting.
+- **Reasoning** fans a problem into two to four independent model runs, then
+  sends their completed outputs to a separate synthesis run. This creates a
+  nonlinear experiment graph around the model while remaining honest that
+  each individual Qwen call is still autoregressive.
+
+Reasoning graph nodes are ordinary persisted runs, so any node captured with
+diagnostics enabled can be opened in the Diagnostics workspace.
+
 See [docs/architecture.md](docs/architecture.md) for the component model and
 [docs/development.md](docs/development.md) for setup and branch conventions.
