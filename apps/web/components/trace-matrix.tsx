@@ -15,10 +15,10 @@ export function TraceMatrix({ tokens, values }: TraceMatrixProps) {
   if (!tokens?.length || !values?.length) {
     return (
       <div className="empty-trace">
-        <span className="empty-trace__mark">∅</span>
+        <span className="empty-trace__mark">—</span>
         <div>
-          <strong>No activation trace captured</strong>
-          <p>Enable hidden states for a run to populate the layer × token field.</p>
+          <strong>No activation data</strong>
+          <p>Enable activations to capture the final layer-by-token window.</p>
         </div>
       </div>
     );
@@ -32,7 +32,7 @@ export function TraceMatrix({ tokens, values }: TraceMatrixProps) {
   return (
     <div className="matrix-scroll" tabIndex={0} aria-label="Layer by token activation matrix">
       <div className="trace-matrix" style={gridStyle}>
-        <div className="matrix-corner">TOKEN</div>
+        <div className="matrix-corner">Token</div>
         {tokens.map((token, index) => (
           <div className="matrix-token" key={`${token}-${index}`} title={token}>
             {token.replace("Ġ", "·").slice(0, 8)}

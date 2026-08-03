@@ -1,5 +1,6 @@
 import type {
   CreateRunRequest,
+  DeleteRunResponse,
   HealthResponse,
   RunEvent,
   RunRecord,
@@ -39,6 +40,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  cancelRun: (runId: string) =>
+    request<RunRecord>(`/runs/${runId}/cancel`, { method: "POST" }),
+  deleteRun: (runId: string) =>
+    request<DeleteRunResponse>(`/runs/${runId}`, { method: "DELETE" }),
   result: (runId: string) =>
     request<RunResult>(`/runs/${runId}/artifacts/result.json`),
 };

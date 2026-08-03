@@ -13,13 +13,17 @@ import { TraceMatrix } from "@/components/trace-matrix";
 import { api, subscribeToRun } from "@/lib/api";
 import { formatBytes, formatTimestamp } from "@/lib/format";
 
-const terminalStatuses = new Set(["completed", "failed", "cancelled"]);
+const terminalStatuses = new Set<RunRecord["status"]>([
+  "completed",
+  "failed",
+  "cancelled",
+]);
 
 const initialRequest: CreateRunRequest = {
-  prompt: "Explain how a Jacobian lens differs from a logit lens in two sentences.",
+  prompt: "",
   system_prompt: null,
   generation: {
-    max_new_tokens: 128,
+    max_new_tokens: 1024,
     temperature: 0.7,
     top_p: 0.9,
     do_sample: true,
@@ -44,22 +48,25 @@ export function LabDashboard() {
   const [events, setEvents] = useState<RunEvent[]>([]);
   const [streamedText, setStreamedText] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [clearingHistory, setClearingHistory] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const lastSequence = useRef(0);
 
   const refreshRuns = useCallback(async () => {
     const nextRuns = await api.runs();
     setRuns(nextRuns);
+    return nextRuns;
   }, []);
 
-  useEffect(() => {
-    Promise.all([api.health(), api.runs()])
-      .then(([nextHealth, nextRuns]) => {
-        setHealth(nextHealth);
-        setRuns(nextRuns);
-        setActiveRun(nextRuns[0] ?? null);
-      })
-      .catch((reason: Error) => setError(reason.message));
+  const resetSelection = useCallback(() => {
+    lastSequence.current = 0;
+    setActiveRun(null);
+    setResult(null);
+    setEvents([]);
+    setStreamedText("");
+    setError(null);
   }, []);
 
   const loadRun = useCallback(async (run: RunRecord) => {
@@ -69,13 +76,27 @@ export function LabDashboard() {
     setStreamedText(run.output_text ?? "");
     setResult(null);
     setError(null);
-    const history = await api.events(run.id);
-    lastSequence.current = history.at(-1)?.sequence ?? 0;
-    setEvents(history);
-    if (run.status === "completed") {
-      setResult(await api.result(run.id));
+    try {
+      const history = await api.events(run.id);
+      lastSequence.current = history.at(-1)?.sequence ?? 0;
+      setEvents(history);
+      if (run.status === "completed" || run.status === "cancelled") {
+        setResult(await api.result(run.id).catch(() => null));
+      }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to load run");
     }
   }, []);
+
+  useEffect(() => {
+    Promise.all([api.health(), api.runs()])
+      .then(([nextHealth, nextRuns]) => {
+        setHealth(nextHealth);
+        setRuns(nextRuns);
+        if (nextRuns[0]) void loadRun(nextRuns[0]);
+      })
+      .catch((reason: Error) => setError(reason.message));
+  }, [loadRun]);
 
   useEffect(() => {
     if (!activeRun || terminalStatuses.has(activeRun.status)) return;
@@ -93,12 +114,13 @@ export function LabDashboard() {
           setStreamedText((current) => current + event.payload.text);
         }
         if (["run.completed", "run.failed", "run.cancelled"].includes(event.type)) {
+          setStopping(false);
           Promise.all([api.run(activeRun.id), api.runs()])
             .then(async ([updated, nextRuns]) => {
               setActiveRun(updated);
               setRuns(nextRuns);
-              if (updated.status === "completed") {
-                setResult(await api.result(updated.id));
+              if (updated.status === "completed" || updated.status === "cancelled") {
+                setResult(await api.result(updated.id).catch(() => null));
               }
             })
             .catch((reason: Error) => setError(reason.message));
@@ -127,7 +149,68 @@ export function LabDashboard() {
     }
   }
 
-  const latestPhase = events.at(-1)?.type ?? activeRun?.status ?? "idle";
+  async function stopRun() {
+    if (!activeRun || terminalStatuses.has(activeRun.status)) return;
+    setStopping(true);
+    setError(null);
+    try {
+      await api.cancelRun(activeRun.id);
+    } catch (reason) {
+      setStopping(false);
+      setError(reason instanceof Error ? reason.message : "Unable to stop run");
+    }
+  }
+
+  async function deleteRun(run: RunRecord) {
+    if (!terminalStatuses.has(run.status)) return;
+    if (!window.confirm("Delete this run and all of its stored artifacts?")) return;
+    setDeletingId(run.id);
+    setError(null);
+    try {
+      await api.deleteRun(run.id);
+      const nextRuns = await refreshRuns();
+      if (activeRun?.id === run.id) {
+        const nextRun = nextRuns[0];
+        if (nextRun) await loadRun(nextRun);
+        else resetSelection();
+      }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to delete run");
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
+  async function clearHistory() {
+    const deletableRuns = runs.filter((run) => terminalStatuses.has(run.status));
+    if (!deletableRuns.length) return;
+    if (
+      !window.confirm(
+        `Delete ${deletableRuns.length} finished run${deletableRuns.length === 1 ? "" : "s"} and their artifacts?`,
+      )
+    ) {
+      return;
+    }
+    setClearingHistory(true);
+    setError(null);
+    try {
+      for (const run of deletableRuns) await api.deleteRun(run.id);
+      const nextRuns = await refreshRuns();
+      const currentStillExists = nextRuns.some((run) => run.id === activeRun?.id);
+      if (!currentStillExists) {
+        const nextRun = nextRuns[0];
+        if (nextRun) await loadRun(nextRun);
+        else resetSelection();
+      }
+    } catch (reason) {
+      await refreshRuns();
+      setError(reason instanceof Error ? reason.message : "Unable to clear run history");
+    } finally {
+      setClearingHistory(false);
+    }
+  }
+
+  const latestPhase = events.at(-1)?.type ?? activeRun?.status ?? "ready";
   const tokenTraces = useMemo(() => result?.tokens ?? [], [result]);
   const confidence = useMemo(() => {
     const logprobs = tokenTraces.flatMap((token) =>
@@ -136,101 +219,121 @@ export function LabDashboard() {
     if (!logprobs.length) return null;
     return logprobs.reduce((sum, value) => sum + value, 0) / logprobs.length;
   }, [tokenTraces]);
+  const isActive = Boolean(activeRun && !terminalStatuses.has(activeRun.status));
+  const outputText = streamedText || activeRun?.output_text || "";
+  const maxTokenLimit = Math.min(32_768, health?.model.max_context_tokens ?? 32_768);
+  const finishedRunCount = runs.filter((run) => terminalStatuses.has(run.status)).length;
 
   return (
-    <main className="lab-shell">
-      <header className="topbar">
-        <div className="brand">
-          <span className="brand__glyph" aria-hidden="true">
-            λ
-          </span>
-          <div>
-            <p>LOCAL INTERPRETABILITY WORKBENCH</p>
-            <h1>LLM Lab</h1>
-          </div>
+    <main className="app-shell">
+      <header className="app-header">
+        <div className="app-title">
+          <h1>LLM Lab</h1>
+          <span>Local model workspace</span>
         </div>
-        <div className="runtime-strip">
+        <div className="model-status">
           <StatusDot active={health?.model.available ?? false} />
-          <span>{health?.model.architecture ?? "API offline"}</span>
-          <span className="runtime-strip__divider" />
-          <span>{health?.model.device ?? (health?.model.loaded ? "loaded" : "cold")}</span>
-          <span className="runtime-strip__divider" />
-          <span>{formatBytes(health?.model.weight_bytes ?? null)}</span>
+          <span>{health?.model.architecture ?? "API unavailable"}</span>
+          <span className="model-status__detail">
+            {health?.model.device ?? (health?.model.loaded ? "loaded" : "not loaded")}
+          </span>
         </div>
       </header>
 
-      <div className="workspace">
-        <aside className="run-rail">
-          <div className="rail-heading">
-            <span>RUN INDEX</span>
-            <span>{runs.length.toString().padStart(2, "0")}</span>
+      <div className="app-body">
+        <aside className="history-sidebar">
+          <div className="history-header">
+            <div>
+              <h2>History</h2>
+              <span>{runs.length} runs</span>
+            </div>
+            <button className="secondary-button" onClick={resetSelection} type="button">
+              New run
+            </button>
           </div>
-          <div className="run-list">
+
+          <div className="history-list">
             {runs.length ? (
               runs.map((run) => (
-                <button
-                  className={`run-item ${activeRun?.id === run.id ? "is-active" : ""}`}
+                <div
+                  className={`history-item ${activeRun?.id === run.id ? "is-selected" : ""}`}
                   key={run.id}
-                  onClick={() => void loadRun(run)}
-                  type="button"
                 >
-                  <span className={`run-state run-state--${run.status}`} />
-                  <span className="run-item__copy">
-                    <strong>{run.prompt}</strong>
-                    <small>
-                      {formatTimestamp(run.created_at)} · {run.tokens_generated} tok
-                    </small>
-                  </span>
-                  <span className="run-item__id">{run.id.slice(0, 5)}</span>
-                </button>
+                  <button className="history-select" onClick={() => void loadRun(run)} type="button">
+                    <span className={`run-state run-state--${run.status}`} />
+                    <span className="history-copy">
+                      <strong>{run.prompt}</strong>
+                      <small>
+                        {formatTimestamp(run.created_at)} · {run.status} · {run.tokens_generated} tokens
+                      </small>
+                    </span>
+                  </button>
+                  <button
+                    aria-label={`Delete run ${run.id}`}
+                    className="delete-button"
+                    disabled={!terminalStatuses.has(run.status) || deletingId === run.id}
+                    onClick={() => void deleteRun(run)}
+                    title={terminalStatuses.has(run.status) ? "Delete run" : "Stop this run first"}
+                    type="button"
+                  >
+                    {deletingId === run.id ? "Deleting" : "Delete"}
+                  </button>
+                </div>
               ))
             ) : (
-              <p className="rail-empty">Runs will appear here after the first experiment.</p>
+              <div className="empty-history">
+                <p>No runs yet</p>
+                <span>Your local experiments will appear here.</span>
+              </div>
             )}
           </div>
-          <div className="rail-model">
-            <span>MODEL SOURCE</span>
-            <code title={health?.model.path}>{health?.model.path ?? "Connecting…"}</code>
-            <dl>
-              <div>
-                <dt>LAYERS</dt>
-                <dd>{health?.model.layers ?? "—"}</dd>
-              </div>
-              <div>
-                <dt>WIDTH</dt>
-                <dd>{health?.model.hidden_size ?? "—"}</dd>
-              </div>
-              <div>
-                <dt>VOCAB</dt>
-                <dd>{health?.model.vocabulary_size?.toLocaleString() ?? "—"}</dd>
-              </div>
-            </dl>
+
+          <div className="history-footer">
+            <button
+              className="text-button danger-text"
+              disabled={!finishedRunCount || clearingHistory}
+              onClick={() => void clearHistory()}
+              type="button"
+            >
+              {clearingHistory ? "Clearing history…" : `Clear finished (${finishedRunCount})`}
+            </button>
+            <div className="model-summary">
+              <span>{formatBytes(health?.model.weight_bytes ?? null)}</span>
+              <span>{health?.model.layers ?? "—"} layers</span>
+              <span>{health?.model.max_context_tokens?.toLocaleString() ?? "—"} context</span>
+            </div>
           </div>
         </aside>
 
-        <section className="main-stage">
-          <form className="prompt-panel" onSubmit={submitRun}>
-            <div className="panel-label">
-              <span>01 / INPUT PROBE</span>
-              <span className="phase-pill">{latestPhase.replace(".", " / ")}</span>
+        <section className="workspace-main">
+          <form className="composer panel" onSubmit={submitRun}>
+            <div className="section-heading">
+              <div>
+                <h2>Prompt</h2>
+                <p>Run Qwen locally and capture bounded observability data.</p>
+              </div>
+              <span className={`status-badge status-badge--${activeRun?.status ?? "ready"}`}>
+                {latestPhase.replace(".", " ")}
+              </span>
             </div>
-            <label className="prompt-field">
+
+            <label className="prompt-input">
               <span className="sr-only">Prompt</span>
               <textarea
                 onChange={(event) => setRequest({ ...request, prompt: event.target.value })}
-                placeholder="Enter a prompt to inspect…"
+                placeholder="Ask the model something…"
                 required
-                rows={4}
+                rows={6}
                 value={request.prompt}
               />
-              <span className="prompt-counter">{request.prompt.length} chars</span>
             </label>
-            <div className="control-grid">
-              <label>
-                <span>MAX TOKENS</span>
+
+            <div className="settings-row">
+              <label className="number-field">
+                <span>Max output tokens</span>
                 <input
                   min={1}
-                  max={1024}
+                  max={maxTokenLimit}
                   onChange={(event) =>
                     setRequest({
                       ...request,
@@ -243,9 +346,10 @@ export function LabDashboard() {
                   type="number"
                   value={request.generation.max_new_tokens}
                 />
+                <small>Up to {maxTokenLimit.toLocaleString()}</small>
               </label>
-              <label>
-                <span>TEMPERATURE</span>
+              <label className="number-field">
+                <span>Temperature</span>
                 <input
                   min={0}
                   max={2}
@@ -263,87 +367,122 @@ export function LabDashboard() {
                   value={request.generation.temperature}
                 />
               </label>
-              <TraceToggle
-                checked={request.generation.enable_thinking}
-                label="THINKING"
-                onChange={(checked) =>
-                  setRequest({
-                    ...request,
-                    generation: { ...request.generation, enable_thinking: checked },
-                  })
-                }
-              />
-              <TraceToggle
-                checked={request.traces.logprobs}
-                label="LOGPROBS"
-                onChange={(checked) =>
-                  setRequest({ ...request, traces: { ...request.traces, logprobs: checked } })
-                }
-              />
-              <TraceToggle
-                checked={request.traces.hidden_states}
-                label="ACTIVATIONS"
-                onChange={(checked) =>
-                  setRequest({
-                    ...request,
-                    traces: { ...request.traces, hidden_states: checked },
-                  })
-                }
-              />
-              <TraceToggle
-                checked={request.traces.attentions}
-                label="ATTENTION"
-                onChange={(checked) =>
-                  setRequest({ ...request, traces: { ...request.traces, attentions: checked } })
-                }
-              />
-              <TraceToggle
-                checked={request.traces.jspace}
-                disabled={!health?.model.jspace_available}
-                label="J-SPACE"
-                onChange={(checked) =>
-                  setRequest({ ...request, traces: { ...request.traces, jspace: checked } })
-                }
-              />
-              <button
-                className="run-button"
-                disabled={submitting || !health?.model.available}
-                type="submit"
-              >
-                <span>{submitting ? "QUEUING" : "RUN PROBE"}</span>
-                <span aria-hidden="true">→</span>
-              </button>
+              <div className="toggle-list" aria-label="Run options">
+                <OptionToggle
+                  checked={request.generation.enable_thinking}
+                  label="Thinking"
+                  onChange={(checked) =>
+                    setRequest({
+                      ...request,
+                      generation: { ...request.generation, enable_thinking: checked },
+                    })
+                  }
+                />
+                <OptionToggle
+                  checked={request.traces.logprobs}
+                  label="Logprobs"
+                  onChange={(checked) =>
+                    setRequest({ ...request, traces: { ...request.traces, logprobs: checked } })
+                  }
+                />
+                <OptionToggle
+                  checked={request.traces.hidden_states}
+                  label="Activations"
+                  onChange={(checked) =>
+                    setRequest({
+                      ...request,
+                      traces: { ...request.traces, hidden_states: checked },
+                    })
+                  }
+                />
+                <OptionToggle
+                  checked={request.traces.attentions}
+                  label="Attention"
+                  onChange={(checked) =>
+                    setRequest({ ...request, traces: { ...request.traces, attentions: checked } })
+                  }
+                />
+                <OptionToggle
+                  checked={request.traces.jspace}
+                  disabled={!health?.model.jspace_available}
+                  label="J-space"
+                  onChange={(checked) =>
+                    setRequest({ ...request, traces: { ...request.traces, jspace: checked } })
+                  }
+                />
+              </div>
             </div>
-            {error ? <p className="error-banner">{error}</p> : null}
+
+            <div className="composer-actions">
+              <p>
+                Activation and attention capture use only the final 256-token window. Long generation
+                is no longer blocked by that limit.
+              </p>
+              <div className="button-group">
+                {isActive ? (
+                  <button
+                    className="secondary-button stop-button"
+                    disabled={stopping}
+                    onClick={() => void stopRun()}
+                    type="button"
+                  >
+                    {stopping ? "Stopping…" : "Stop"}
+                  </button>
+                ) : null}
+                <button
+                  className="primary-button"
+                  disabled={submitting || !health?.model.available || !request.prompt.trim()}
+                  type="submit"
+                >
+                  {submitting ? "Queuing…" : "Run model"}
+                </button>
+              </div>
+            </div>
+            {error ? <p className="message message--error">{error}</p> : null}
           </form>
 
-          <section className="output-panel">
-            <div className="panel-label">
-              <span>02 / MODEL OUTPUT</span>
-              <div className="metrics-inline">
-                <span>{activeRun?.tokens_generated ?? 0} TOKENS</span>
-                <span>{confidence === null ? "—" : `${(confidence * 100).toFixed(1)}%`} MEAN P</span>
+          <section className="panel output-panel">
+            <div className="section-heading section-heading--compact">
+              <div>
+                <h2>Output</h2>
+                <p>{activeRun ? `Run ${activeRun.id.slice(0, 8)}` : "No run selected"}</p>
+              </div>
+              <div className="output-metrics">
+                <span>{activeRun?.tokens_generated ?? result?.tokens.length ?? 0} tokens</span>
+                <span>{confidence === null ? "No likelihood" : `${(confidence * 100).toFixed(1)}% mean p`}</span>
               </div>
             </div>
-            <div className="output-copy">
-              {streamedText || activeRun?.output_text ? (
-                <p>{streamedText || activeRun?.output_text}</p>
+            {activeRun?.error ? <p className="message message--error">{activeRun.error}</p> : null}
+            <div className="output-copy" aria-live="polite">
+              {outputText ? (
+                <p>{outputText}</p>
               ) : (
-                <p className="output-placeholder">
-                  The generated response will stream here. Trace evidence remains separate below.
-                </p>
+                <p className="placeholder-copy">Generated text will stream here.</p>
               )}
             </div>
+            {result?.generation ? (
+              <div className="run-metadata">
+                <span>{result.generation.input_tokens} input tokens</span>
+                <span>{result.generation.context_limit.toLocaleString()} context window</span>
+                <span>
+                  {result.generation.logprobs_captured
+                    ? "Logprobs captured"
+                    : `Logprobs skipped above ${result.generation.logprob_token_limit.toLocaleString()} tokens`}
+                </span>
+              </div>
+            ) : null}
           </section>
 
-          <section className="trace-panel">
-            <div className="panel-label">
-              <span>03 / RESIDUAL STREAM MAGNITUDE</span>
-              <div className="legend">
-                <span>LOW</span>
-                <span className="legend__bar" />
-                <span>HIGH</span>
+          <section className="panel trace-panel">
+            <div className="section-heading section-heading--compact">
+              <div>
+                <h2>Activation magnitude</h2>
+                <p>
+                  Residual-stream norm by layer and token
+                  {result?.traces.capture?.truncated ? " · final trace window" : ""}
+                </p>
               </div>
+              <div className="heat-legend"><span>Low</span><i /><span>High</span></div>
             </div>
             <TraceMatrix
               tokens={result?.traces.tokens}
@@ -351,17 +490,19 @@ export function LabDashboard() {
             />
           </section>
 
-          <div className="lower-grid">
-            <section className="token-panel">
-              <div className="panel-label">
-                <span>04 / TOKEN LIKELIHOOD</span>
-                <span>TOP-1 TRACE</span>
+          <div className="detail-grid">
+            <section className="panel token-panel">
+              <div className="section-heading section-heading--compact">
+                <div>
+                  <h2>Token likelihood</h2>
+                  <p>Generated-token confidence</p>
+                </div>
               </div>
               <div className="token-table" role="table" aria-label="Generated token probabilities">
-                {tokenTraces.length ? (
-                  tokenTraces.slice(0, 24).map((token) => (
+                {tokenTraces.some((token) => token.logprob !== null) ? (
+                  tokenTraces.slice(0, 128).map((token) => (
                     <div className="token-row" role="row" key={`${token.index}-${token.token_id}`}>
-                      <span>{token.index.toString().padStart(3, "0")}</span>
+                      <span>{token.index + 1}</span>
                       <code>{token.text.replaceAll(" ", "·") || "∅"}</code>
                       <span>{token.logprob === null ? "—" : token.logprob.toFixed(3)}</span>
                       <span className="probability-track">
@@ -374,35 +515,34 @@ export function LabDashboard() {
                     </div>
                   ))
                 ) : (
-                  <p className="table-empty">Enable logprobs and complete a run to inspect token confidence.</p>
+                  <p className="empty-copy">
+                    No logprobs were captured. Budgets above 1,024 tokens skip full-vocabulary
+                    scores to keep GPU memory bounded.
+                  </p>
                 )}
               </div>
             </section>
 
-            <section className="jspace-panel">
-              <div className="panel-label">
-                <span>05 / J-SPACE LENS</span>
+            <section className="panel lens-panel">
+              <div className="section-heading section-heading--compact">
+                <div>
+                  <h2>J-space lens</h2>
+                  <p>Optional concept readout</p>
+                </div>
                 <StatusDot active={health?.model.jspace_available ?? false} />
               </div>
-              <div className="jspace-state">
-                <div className="orbital" aria-hidden="true">
-                  <span />
-                  <span />
-                  <i>J</i>
-                </div>
-                <div>
-                  <strong>
-                    {health?.model.jspace_available ? "Lens ready" : "Lens checkpoint required"}
-                  </strong>
-                  <p>
-                    {health?.model.jspace_reason ??
-                      "A compatible fitted lens is available for concept readout."}
-                  </p>
-                </div>
+              <div className="lens-copy">
+                <strong>
+                  {health?.model.jspace_available ? "Lens ready" : "Not configured"}
+                </strong>
+                <p>
+                  {health?.model.jspace_reason ??
+                    "A compatible fitted lens is available for concept readout."}
+                </p>
+                <p className="evidence-note">
+                  These measurements are model telemetry, not a hidden chain-of-thought transcript.
+                </p>
               </div>
-              <p className="evidence-note">
-                J-space concepts are approximate activation readouts—not a complete reasoning transcript.
-              </p>
             </section>
           </div>
         </section>
@@ -415,7 +555,7 @@ function StatusDot({ active }: { active: boolean }) {
   return <span className={`status-dot ${active ? "is-active" : ""}`} aria-hidden="true" />;
 }
 
-function TraceToggle({
+function OptionToggle({
   checked,
   disabled = false,
   label,
@@ -427,14 +567,13 @@ function TraceToggle({
   onChange: (checked: boolean) => void;
 }) {
   return (
-    <label className={`trace-toggle ${disabled ? "is-disabled" : ""}`}>
+    <label className={`option-toggle ${disabled ? "is-disabled" : ""}`}>
       <input
         checked={checked}
         disabled={disabled}
         onChange={(event) => onChange(event.target.checked)}
         type="checkbox"
       />
-      <span className="trace-toggle__box" aria-hidden="true" />
       <span>{label}</span>
     </label>
   );
