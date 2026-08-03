@@ -21,7 +21,7 @@ make fit-jlens
 
 Defaults:
 
-- 100 WikiText prompts, each 128 tokens long;
+- 100 WikiText prompts, each 64 tokens long (sized for an 8 GB GPU);
 - all source layers through the layer before the final output layer;
 - calibration batches of 16 hidden dimensions;
 - a checkpoint saved every five prompts;

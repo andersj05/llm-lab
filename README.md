@@ -56,7 +56,8 @@ make dev
 official Anthropic Jacobian-lens implementation to 100 local Qwen prompts and
 writes `jacobian_lens.pt` beside the model directory, outside Git. The command
 is resumable through `jacobian_lens.fit.pt`; rerunning it continues from the
-last saved prompt. You can start the application before the fit finishes, but
+last saved prompt. Its 64-token calibration window is sized for the local 8 GB
+GPU. You can start the application before the fit finishes, but
 J-space stays disabled until a compatible checkpoint is present.
 
 Then open `http://localhost:3000` from Windows. The API listens on

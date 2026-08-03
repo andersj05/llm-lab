@@ -25,9 +25,9 @@ def parse_args() -> argparse.Namespace:
         default=None,
     )
     parser.add_argument("--prompts", type=int, default=100)
-    parser.add_argument("--sequence-length", type=int, default=128)
+    parser.add_argument("--sequence-length", type=int, default=64)
     parser.add_argument("--dim-batch", type=int, default=16)
-    parser.add_argument("--skip-first", type=int, default=16)
+    parser.add_argument("--skip-first", type=int, default=8)
     parser.add_argument("--checkpoint-every", type=int, default=5)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--dataset", default="Salesforce/wikitext")
