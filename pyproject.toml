@@ -20,7 +20,7 @@ model = [
   "transformers>=5.5,<6",
 ]
 lens-fit = [
-  "datasets>=4,<5",
+  "datasets>=4,<6",
 ]
 
 [dependency-groups]
