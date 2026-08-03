@@ -58,11 +58,33 @@ export interface TokenTrace {
 export interface TraceSummary {
   tokens?: string[];
   hidden_state_norms?: number[][];
+  residual_update_norms?: number[][];
   mean_attentions?: number[][][];
+  jspace?: JSpaceSummary;
   capture?: {
     window_tokens: number;
     truncated: boolean;
   };
+}
+
+export interface JSpaceToken {
+  token_id: number;
+  text: string;
+  rank: number;
+  logit: number;
+}
+
+export interface JSpaceSummary {
+  method: "jacobian_lens";
+  lens_prompts: number;
+  lens_width: number;
+  layers: number[];
+  output_layer: number;
+  tokens: string[];
+  token_ids: number[];
+  token_offset: number;
+  truncated: boolean;
+  top_tokens: JSpaceToken[][][];
 }
 
 export interface GenerationSummary {
@@ -123,6 +145,9 @@ export interface ModelInfo {
   device: string | null;
   jspace_available: boolean;
   jspace_reason: string | null;
+  jspace_method: string | null;
+  jspace_prompts: number | null;
+  jspace_layers: number | null;
 }
 
 export interface HealthResponse {

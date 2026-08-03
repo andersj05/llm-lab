@@ -48,8 +48,16 @@ Copy the environment template and install both workspaces:
 ```bash
 cp .env.example .env
 make bootstrap
+make fit-jlens
 make dev
 ```
+
+`make fit-jlens` is a one-time, GPU-intensive calibration step. It fits the
+official Anthropic Jacobian-lens implementation to 100 local Qwen prompts and
+writes `jacobian_lens.pt` beside the model directory, outside Git. The command
+is resumable through `jacobian_lens.fit.pt`; rerunning it continues from the
+last saved prompt. You can start the application before the fit finishes, but
+J-space stays disabled until a compatible checkpoint is present.
 
 Then open `http://localhost:3000` from Windows. The API listens on
 `http://localhost:8000` by default.
@@ -63,6 +71,17 @@ because tracing is enabled.
 Finished runs can be deleted individually or cleared from the History sidebar.
 Deletion removes the SQLite record, its ordered events, and the corresponding
 artifact directory.
+
+The Layer activity view shows the size of each layer's residual-stream update
+for each token. Color is normalized independently within a layer so a single
+high-magnitude layer cannot flatten every other row. Switch to Residual
+magnitude to inspect the total residual-stream norm instead.
+
+J-space is a separate, model-specific readout. It uses the fitted average
+Jacobian to ask which vocabulary concepts each intermediate residual state
+would contribute at the final layer. It is an experimental interpretability
+measurement, not hidden chain-of-thought or evidence that the model is
+conscious. See [docs/jspace.md](docs/jspace.md) for the method and controls.
 
 See [docs/architecture.md](docs/architecture.md) for the component model and
 [docs/development.md](docs/development.md) for setup and branch conventions.

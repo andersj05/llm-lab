@@ -1,4 +1,4 @@
-.PHONY: bootstrap dev api web format check check-api check-web clean-runs
+.PHONY: bootstrap dev api web fit-jlens format check check-api check-web clean-runs
 
 bootstrap:
 	uv sync --extra model
@@ -12,6 +12,10 @@ api:
 
 web:
 	npm run dev:web
+
+fit-jlens:
+	uv sync --extra model --extra lens-fit
+	uv run --extra model --extra lens-fit python scripts/fit_jlens.py
 
 format:
 	uv run ruff format services/api

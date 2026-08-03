@@ -10,6 +10,7 @@ import type {
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { TraceMatrix } from "@/components/trace-matrix";
+import { JSpaceViewer } from "@/components/jspace-viewer";
 import { api, subscribeToRun } from "@/lib/api";
 import { formatBytes, formatTimestamp } from "@/lib/format";
 
@@ -476,9 +477,9 @@ export function LabDashboard() {
           <section className="panel trace-panel">
             <div className="section-heading section-heading--compact">
               <div>
-                <h2>Activation magnitude</h2>
+                <h2>Layer activity</h2>
                 <p>
-                  Residual-stream norm by layer and token
+                  Transformer contribution by layer and token
                   {result?.traces.capture?.truncated ? " · final trace window" : ""}
                 </p>
               </div>
@@ -486,7 +487,8 @@ export function LabDashboard() {
             </div>
             <TraceMatrix
               tokens={result?.traces.tokens}
-              values={result?.traces.hidden_state_norms}
+              residualUpdates={result?.traces.residual_update_norms}
+              residualNorms={result?.traces.hidden_state_norms}
             />
           </section>
 
@@ -523,28 +525,13 @@ export function LabDashboard() {
               </div>
             </section>
 
-            <section className="panel lens-panel">
-              <div className="section-heading section-heading--compact">
-                <div>
-                  <h2>J-space lens</h2>
-                  <p>Optional concept readout</p>
-                </div>
-                <StatusDot active={health?.model.jspace_available ?? false} />
-              </div>
-              <div className="lens-copy">
-                <strong>
-                  {health?.model.jspace_available ? "Lens ready" : "Not configured"}
-                </strong>
-                <p>
-                  {health?.model.jspace_reason ??
-                    "A compatible fitted lens is available for concept readout."}
-                </p>
-                <p className="evidence-note">
-                  These measurements are model telemetry, not a hidden chain-of-thought transcript.
-                </p>
-              </div>
-            </section>
           </div>
+
+          <JSpaceViewer
+            available={health?.model.jspace_available ?? false}
+            reason={health?.model.jspace_reason}
+            summary={result?.traces.jspace}
+          />
         </section>
       </div>
     </main>

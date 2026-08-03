@@ -58,7 +58,16 @@ when requested.
 The Jacobian-lens adapter is optional. It requires both the reference `jlens`
 package and a compatible fitted lens checkpoint. The system must report the
 adapter as unavailable instead of substituting logit-lens output or fabricated
-J-space values.
+J-space values. The adapter verifies hidden width, vocabulary size, model
+architecture, and fitted source layers before enabling the run control. During
+a J-space run it records the configured token tail, transports each source
+layer through its fitted average Jacobian, applies the model's own unembedding,
+and returns ranked vocabulary concepts for the browser grid.
+
+Layer activity and J-space answer different questions. Layer activity measures
+the norm of a token's residual update (`||h[l+1] - h[l]||`) or total residual
+magnitude (`||h[l]||`). J-space is a vocabulary readout of what an intermediate
+state contributes after transport through the model-specific Jacobian lens.
 
 ## Persistence
 

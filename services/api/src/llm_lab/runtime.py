@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
 from llm_lab.config import Settings
+from llm_lab.jspace import JacobianLensAdapter
 from llm_lab.schemas import CreateRunRequest, ModelInfo, TokenTrace
 
 if TYPE_CHECKING:
@@ -42,6 +43,11 @@ class ModelRuntime:
         self._tokenizer: Any | None = None
         self._device: str | None = None
         self._load_lock = threading.Lock()
+        self._jspace = JacobianLensAdapter(
+            settings.jlens_path,
+            settings.jspace_token_limit,
+            settings.jspace_layer_stride,
+        )
 
     def inspect(self) -> ModelInfo:
         config_path = self.settings.model_path / "config.json"
@@ -52,7 +58,7 @@ class ModelRuntime:
         weight_bytes = sum(
             path.stat().st_size for path in self.settings.model_path.glob("*.safetensors")
         )
-        jlens_available, jlens_reason = self._inspect_jlens()
+        jspace = self._jspace.inspect(config, self.settings.model_path)
         return ModelInfo(
             path=str(self.settings.model_path),
             available=available,
@@ -65,22 +71,11 @@ class ModelRuntime:
             max_context_tokens=config.get("max_position_embeddings"),
             weight_bytes=weight_bytes or None,
             device=self._device,
-            jspace_available=jlens_available,
-            jspace_reason=jlens_reason,
-        )
-
-    def _inspect_jlens(self) -> tuple[bool, str | None]:
-        if self.settings.jlens_path is None:
-            return False, "Set LLM_LAB_JLENS_PATH to a fitted compatible lens checkpoint"
-        if not self.settings.jlens_path.exists():
-            return False, f"Lens checkpoint not found: {self.settings.jlens_path}"
-        try:
-            import jlens  # noqa: F401
-        except ImportError:
-            return False, "Install the Anthropic jacobian-lens reference package"
-        return (
-            False,
-            "The fitted lens was found, but the J-lens execution adapter is not enabled yet",
+            jspace_available=jspace["available"],
+            jspace_reason=jspace.get("reason"),
+            jspace_method=jspace.get("method"),
+            jspace_prompts=jspace.get("prompts"),
+            jspace_layers=jspace.get("layers"),
         )
 
     def _load(self) -> tuple[Any, Any, Any]:
@@ -242,7 +237,13 @@ class ModelRuntime:
             trace_sequences,
             request,
         )
-        if trace_summary:
+        if request.traces.jspace:
+            trace_summary["jspace"] = self._jspace.capture(
+                model,
+                tokenizer,
+                generation_output.sequences,
+            )
+        if request.traces.hidden_states or request.traces.attentions:
             trace_summary["capture"] = {
                 "window_tokens": int(trace_sequences.shape[-1]),
                 "truncated": generation_output.sequences.shape[-1] > trace_sequences.shape[-1],
@@ -321,10 +322,16 @@ class ModelRuntime:
         summary: dict[str, Any] = {"tokens": tokens}
         raw: dict[str, Tensor] = {}
         if request.traces.hidden_states and outputs.hidden_states:
-            norms = torch.stack(
-                [state[0].float().norm(dim=-1).cpu() for state in outputs.hidden_states]
+            states = [state[0].float().cpu() for state in outputs.hidden_states]
+            norms = torch.stack([state.norm(dim=-1) for state in states])
+            update_norms = torch.stack(
+                [
+                    (states[index + 1] - states[index]).norm(dim=-1)
+                    for index in range(len(states) - 1)
+                ]
             )
             summary["hidden_state_norms"] = norms.tolist()
+            summary["residual_update_norms"] = update_norms.tolist()
             if request.traces.persist_raw:
                 raw.update(
                     {

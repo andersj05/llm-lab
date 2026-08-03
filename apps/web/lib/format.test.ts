@@ -7,10 +7,15 @@ describe("format helpers", () => {
     expect(formatBytes(1_503_300_328)).toBe("1.40 GB");
   });
 
-  it("normalizes a trace matrix across layers", () => {
+  it("normalizes each layer independently", () => {
     expect(normalizeMatrix([[2, 4], [6, 10]])).toEqual([
-      [0, 0.25],
-      [0.5, 1],
+      [0, 1],
+      [0, 1],
     ]);
+  });
+
+  it("clips a single attention-sink outlier", () => {
+    const normalized = normalizeMatrix([[1, 2, 3, 4, 100]]);
+    expect(normalized[0]).toEqual([0, 1 / 3, 2 / 3, 1, 1]);
   });
 });

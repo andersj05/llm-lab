@@ -19,11 +19,12 @@ export function formatTimestamp(value: string): string {
 }
 
 export function normalizeMatrix(values: number[][]): number[][] {
-  const flat = values.flat();
-  const min = Math.min(...flat);
-  const max = Math.max(...flat);
-  if (!Number.isFinite(min) || !Number.isFinite(max) || min === max) {
-    return values.map((row) => row.map(() => 0.5));
-  }
-  return values.map((row) => row.map((value) => (value - min) / (max - min)));
+  return values.map((row) => {
+    const sorted = row.filter(Number.isFinite).toSorted((left, right) => left - right);
+    if (!sorted.length) return row.map(() => 0.5);
+    const low = sorted[0];
+    const high = sorted[Math.min(sorted.length - 1, Math.max(1, Math.floor((sorted.length - 1) * 0.95)))];
+    if (low === high) return row.map(() => 0.5);
+    return row.map((value) => Math.max(0, Math.min(1, (value - low) / (high - low))));
+  });
 }

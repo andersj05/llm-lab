@@ -117,6 +117,9 @@ class ModelInfo(BaseModel):
     device: str | None = None
     jspace_available: bool = False
     jspace_reason: str | None = None
+    jspace_method: str | None = None
+    jspace_prompts: int | None = None
+    jspace_layers: int | None = None
 
 
 class HealthResponse(BaseModel):
