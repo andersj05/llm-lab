@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 class GenerationResult:
     output_text: str
     tokens: list[TokenTrace]
+    generation: dict[str, Any] = field(default_factory=dict)
     trace_summary: dict[str, Any] = field(default_factory=dict)
     raw_tensors: dict[str, Tensor] = field(default_factory=dict)
 
@@ -25,7 +26,10 @@ class Runtime(Protocol):
     def inspect(self) -> ModelInfo: ...
 
     def generate(
-        self, request: CreateRunRequest, on_text: Callable[[str], None]
+        self,
+        request: CreateRunRequest,
+        on_text: Callable[[str], None],
+        should_stop: Callable[[], bool] | None = None,
     ) -> GenerationResult: ...
 
 
@@ -58,6 +62,7 @@ class ModelRuntime:
             layers=config.get("num_hidden_layers"),
             hidden_size=config.get("hidden_size"),
             vocabulary_size=config.get("vocab_size"),
+            max_context_tokens=config.get("max_position_embeddings"),
             weight_bytes=weight_bytes or None,
             device=self._device,
             jspace_available=jlens_available,
@@ -120,7 +125,10 @@ class ModelRuntime:
             return torch, self._model, self._tokenizer
 
     def generate(
-        self, request: CreateRunRequest, on_text: Callable[[str], None]
+        self,
+        request: CreateRunRequest,
+        on_text: Callable[[str], None],
+        should_stop: Callable[[], bool] | None = None,
     ) -> GenerationResult:
         torch, model, tokenizer = self._load()
         if request.traces.jspace and not self.inspect().jspace_available:
@@ -144,15 +152,29 @@ class ModelRuntime:
         encoded = tokenizer(rendered_prompt, return_tensors="pt")
         encoded = {name: value.to(model.device) for name, value in encoded.items()}
         input_length = encoded["input_ids"].shape[-1]
-        if input_length + request.generation.max_new_tokens > self.settings.trace_token_limit:
-            trace_requested = request.traces.hidden_states or request.traces.attentions
-            if trace_requested:
-                raise ValueError(
-                    "Prompt plus generated token budget exceeds LLM_LAB_TRACE_TOKEN_LIMIT "
-                    f"({self.settings.trace_token_limit})"
-                )
+        context_limit = int(
+            getattr(model.config, "max_position_embeddings", 0)
+            or input_length + request.generation.max_new_tokens
+        )
+        available_generation_tokens = context_limit - input_length
+        if available_generation_tokens < 1:
+            raise ValueError(
+                f"The rendered prompt uses {input_length} tokens, which exceeds the model's "
+                f"{context_limit}-token context window"
+            )
+        effective_max_new_tokens = min(
+            request.generation.max_new_tokens,
+            available_generation_tokens,
+        )
 
-        from transformers import TextIteratorStreamer
+        # Keeping a full vocabulary score tensor for every generated token scales poorly.
+        # Long runs still execute, but detailed logprobs remain bounded to a practical budget.
+        logprob_token_limit = max(1024, self.settings.trace_token_limit)
+        capture_logprobs = (
+            request.traces.logprobs and effective_max_new_tokens <= logprob_token_limit
+        )
+
+        from transformers import StoppingCriteria, StoppingCriteriaList, TextIteratorStreamer
 
         streamer = TextIteratorStreamer(
             tokenizer, skip_prompt=True, skip_special_tokens=True, timeout=60
@@ -160,12 +182,21 @@ class ModelRuntime:
         generation_kwargs: dict[str, Any] = {
             **encoded,
             "streamer": streamer,
-            "max_new_tokens": request.generation.max_new_tokens,
+            "max_new_tokens": effective_max_new_tokens,
             "do_sample": request.generation.do_sample,
             "return_dict_in_generate": True,
-            "output_scores": request.traces.logprobs,
+            "output_scores": capture_logprobs,
             "pad_token_id": tokenizer.eos_token_id,
         }
+        if should_stop is not None:
+
+            class CallbackStoppingCriteria(StoppingCriteria):
+                def __call__(self, input_ids: Any, scores: Any, **kwargs: Any) -> bool:
+                    return should_stop()
+
+            generation_kwargs["stopping_criteria"] = StoppingCriteriaList(
+                [CallbackStoppingCriteria()]
+            )
         if request.generation.do_sample:
             generation_kwargs.update(
                 temperature=request.generation.temperature,
@@ -188,9 +219,7 @@ class ModelRuntime:
 
         generation_thread = threading.Thread(target=run_generation, daemon=True)
         generation_thread.start()
-        chunks: list[str] = []
         for chunk in streamer:
-            chunks.append(chunk)
             on_text(chunk)
         generation_thread.join()
         if error_box:
@@ -204,16 +233,32 @@ class ModelRuntime:
         token_traces = self._token_traces(
             torch, tokenizer, generated_ids, getattr(generation_output, "scores", None)
         )
+        trace_token_limit = max(1, self.settings.trace_token_limit)
+        trace_sequences = generation_output.sequences[:, -trace_token_limit:]
         trace_summary, raw_tensors = self._capture_traces(
             torch,
             model,
             tokenizer,
-            generation_output.sequences,
+            trace_sequences,
             request,
         )
+        if trace_summary:
+            trace_summary["capture"] = {
+                "window_tokens": int(trace_sequences.shape[-1]),
+                "truncated": generation_output.sequences.shape[-1] > trace_sequences.shape[-1],
+            }
         return GenerationResult(
             output_text=output_text,
             tokens=token_traces,
+            generation={
+                "input_tokens": input_length,
+                "generated_tokens": len(token_traces),
+                "requested_max_new_tokens": request.generation.max_new_tokens,
+                "effective_max_new_tokens": effective_max_new_tokens,
+                "context_limit": context_limit,
+                "logprobs_captured": capture_logprobs,
+                "logprob_token_limit": logprob_token_limit,
+            },
             trace_summary=trace_summary,
             raw_tensors=raw_tensors,
         )

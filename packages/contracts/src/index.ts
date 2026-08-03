@@ -59,12 +59,32 @@ export interface TraceSummary {
   tokens?: string[];
   hidden_state_norms?: number[][];
   mean_attentions?: number[][][];
+  capture?: {
+    window_tokens: number;
+    truncated: boolean;
+  };
+}
+
+export interface GenerationSummary {
+  input_tokens: number;
+  generated_tokens: number;
+  requested_max_new_tokens: number;
+  effective_max_new_tokens: number;
+  context_limit: number;
+  logprobs_captured: boolean;
+  logprob_token_limit: number;
 }
 
 export interface RunResult {
   output_text: string;
   tokens: TokenTrace[];
+  generation?: GenerationSummary;
   traces: TraceSummary;
+}
+
+export interface DeleteRunResponse {
+  id: string;
+  deleted: boolean;
 }
 
 export interface RunRecord {
@@ -98,6 +118,7 @@ export interface ModelInfo {
   layers: number | null;
   hidden_size: number | null;
   vocabulary_size: number | null;
+  max_context_tokens: number | null;
   weight_bytes: number | null;
   device: string | null;
   jspace_available: boolean;

@@ -49,8 +49,11 @@ when available.
 ### Trace adapters
 
 Instrumentation is opt-in per run because raw hidden states and attention can
-be much larger than generated text. Adapters return compact browser summaries
-and store full tensors as artifacts when requested.
+be much larger than generated text. Generation length is bounded by the model
+context window, while trace capture uses a separate rolling tail window. This
+keeps long runs available without allowing trace tensors to grow without bound.
+Adapters return compact browser summaries and store full tensors as artifacts
+when requested.
 
 The Jacobian-lens adapter is optional. It requires both the reference `jlens`
 package and a compatible fitted lens checkpoint. The system must report the
@@ -85,7 +88,8 @@ large artifacts are downloaded over HTTP.
 Every run records the model path and revision, tokenizer identity, random seed,
 generation configuration, instrumentation flags, software versions, device,
 dtype, and lens identity when present. A run is immutable after it reaches a
-terminal state.
+terminal state unless the user explicitly deletes it; deletion also removes its
+events and artifact directory.
 
 ## Security
 

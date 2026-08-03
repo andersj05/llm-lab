@@ -54,6 +54,15 @@ make dev
 Then open `http://localhost:3000` from Windows. The API listens on
 `http://localhost:8000` by default.
 
+Qwen3 0.6B exposes a 40,960-token context window. LLM Lab accepts generation
+budgets up to 32,768 new tokens and clamps them to the space remaining after the
+rendered prompt. Activation and attention capture remain bounded to the final
+`LLM_LAB_TRACE_TOKEN_LIMIT` tokens so a long generation is not rejected just
+because tracing is enabled.
+
+Finished runs can be deleted individually or cleared from the History sidebar.
+Deletion removes the SQLite record, its ordered events, and the corresponding
+artifact directory.
+
 See [docs/architecture.md](docs/architecture.md) for the component model and
 [docs/development.md](docs/development.md) for setup and branch conventions.
-testing.

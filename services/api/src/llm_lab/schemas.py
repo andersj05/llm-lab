@@ -35,7 +35,7 @@ class EventType(StrEnum):
 class GenerationOptions(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    max_new_tokens: int = Field(default=128, ge=1, le=1024)
+    max_new_tokens: int = Field(default=1024, ge=1, le=32_768)
     temperature: float = Field(default=0.7, ge=0, le=2)
     top_p: float = Field(default=0.9, gt=0, le=1)
     do_sample: bool = True
@@ -98,6 +98,11 @@ class RunRecord(BaseModel):
     completed_at: datetime | None = None
 
 
+class DeleteRunResponse(BaseModel):
+    id: str
+    deleted: bool = True
+
+
 class ModelInfo(BaseModel):
     path: str
     available: bool
@@ -107,6 +112,7 @@ class ModelInfo(BaseModel):
     layers: int | None = None
     hidden_size: int | None = None
     vocabulary_size: int | None = None
+    max_context_tokens: int | None = None
     weight_bytes: int | None = None
     device: str | None = None
     jspace_available: bool = False

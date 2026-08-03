@@ -13,7 +13,14 @@ from llm_lab.config import Settings, get_settings
 from llm_lab.coordinator import RunCoordinator, artifact_media_type
 from llm_lab.repository import RunRepository
 from llm_lab.runtime import ModelRuntime, Runtime
-from llm_lab.schemas import CreateRunRequest, HealthResponse, ModelInfo, RunEvent, RunRecord
+from llm_lab.schemas import (
+    CreateRunRequest,
+    DeleteRunResponse,
+    HealthResponse,
+    ModelInfo,
+    RunEvent,
+    RunRecord,
+)
 
 
 def create_app(settings: Settings | None = None, runtime: Runtime | None = None) -> FastAPI:
@@ -41,7 +48,7 @@ def create_app(settings: Settings | None = None, runtime: Runtime | None = None)
         CORSMiddleware,
         allow_origins=list(resolved_settings.cors_origins),
         allow_credentials=False,
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "DELETE"],
         allow_headers=["*"],
     )
     app.state.settings = resolved_settings
@@ -92,6 +99,16 @@ def create_app(settings: Settings | None = None, runtime: Runtime | None = None)
             raise HTTPException(status_code=404, detail="Run not found") from error
         except RuntimeError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @app.delete("/api/v1/runs/{run_id}", response_model=DeleteRunResponse)
+    async def delete_run(run_id: str) -> DeleteRunResponse:
+        try:
+            await coordinator.delete(run_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Run not found") from error
+        except RuntimeError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return DeleteRunResponse(id=run_id)
 
     @app.get("/api/v1/runs/{run_id}/artifacts/{name}")
     async def get_artifact(run_id: str, name: str) -> FileResponse:

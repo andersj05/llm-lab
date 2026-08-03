@@ -24,3 +24,8 @@ def test_repository_persists_run_lifecycle(tmp_path: Path) -> None:
     assert completed.output_text == "A latent concept."
     assert repository.list_events("run-1") == [event]
     assert repository.list_runs() == [completed]
+
+    assert repository.delete_run("run-1") is True
+    assert repository.get_run("run-1") is None
+    assert repository.list_events("run-1") == []
+    assert repository.delete_run("run-1") is False

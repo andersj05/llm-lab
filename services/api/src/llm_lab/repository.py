@@ -188,6 +188,11 @@ class RunRepository:
             for row in rows
         ]
 
+    def delete_run(self, run_id: str) -> bool:
+        with self._write_lock, self._connect() as connection:
+            cursor = connection.execute("DELETE FROM runs WHERE id = ?", (run_id,))
+        return cursor.rowcount > 0
+
     @staticmethod
     def _to_run(row: sqlite3.Row) -> RunRecord:
         return RunRecord(

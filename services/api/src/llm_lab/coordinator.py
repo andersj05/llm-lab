@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from collections import defaultdict
 from collections.abc import AsyncIterator
 from contextlib import suppress
@@ -60,6 +61,7 @@ class RunCoordinator:
         self.events = EventBus(repository)
         self._queue: asyncio.Queue[tuple[str, CreateRunRequest]] = asyncio.Queue()
         self._cancelled: set[str] = set()
+        self._stop_signals: dict[str, threading.Event] = {}
         self._active_run_id: str | None = None
         self._worker_task: asyncio.Task[None] | None = None
 
@@ -84,6 +86,7 @@ class RunCoordinator:
             {"run_id": run_id, "request": request.model_dump(mode="json")},
         )
         await self.events.publish(run_id, EventType.RUN_QUEUED)
+        self._stop_signals[run_id] = threading.Event()
         await self._queue.put((run_id, request))
         return record
 
@@ -93,12 +96,29 @@ class RunCoordinator:
             raise KeyError(run_id)
         if record.status.terminal:
             return record
-        if record.status is not RunStatus.QUEUED or self._active_run_id == run_id:
-            raise RuntimeError("A running model call cannot yet be interrupted safely")
-        self._cancelled.add(run_id)
-        record = await asyncio.to_thread(self.repository.update_run, run_id, RunStatus.CANCELLED)
-        await self.events.publish(run_id, EventType.RUN_CANCELLED)
+        if record.status is RunStatus.QUEUED and self._active_run_id != run_id:
+            self._cancelled.add(run_id)
+            record = await asyncio.to_thread(
+                self.repository.update_run, run_id, RunStatus.CANCELLED
+            )
+            await self.events.publish(run_id, EventType.RUN_CANCELLED)
+            return record
+        stop_signal = self._stop_signals.get(run_id)
+        if stop_signal is None:
+            raise RuntimeError("The run is no longer attached to the model worker")
+        stop_signal.set()
         return record
+
+    async def delete(self, run_id: str) -> None:
+        record = await asyncio.to_thread(self.repository.get_run, run_id)
+        if record is None:
+            raise KeyError(run_id)
+        if not record.status.terminal:
+            raise RuntimeError("Stop the run before deleting it")
+        await asyncio.to_thread(self.artifacts.delete_run, run_id)
+        deleted = await asyncio.to_thread(self.repository.delete_run, run_id)
+        if not deleted:
+            raise KeyError(run_id)
 
     async def _worker(self) -> None:
         while True:
@@ -111,10 +131,12 @@ class RunCoordinator:
             finally:
                 self._active_run_id = None
                 self._cancelled.discard(run_id)
+                self._stop_signals.pop(run_id, None)
                 self._queue.task_done()
 
     async def _execute(self, run_id: str, request: CreateRunRequest) -> None:
         loop = asyncio.get_running_loop()
+        stop_signal = self._stop_signals[run_id]
         try:
             await asyncio.to_thread(self.repository.update_run, run_id, RunStatus.LOADING)
             await self.events.publish(run_id, EventType.MODEL_LOADING)
@@ -137,11 +159,17 @@ class RunCoordinator:
 
             await asyncio.to_thread(self.repository.update_run, run_id, RunStatus.RUNNING)
             await self.events.publish(run_id, EventType.RUN_STARTED)
-            result = await asyncio.to_thread(self.runtime.generate, request, on_text)
+            result = await asyncio.to_thread(
+                self.runtime.generate,
+                request,
+                on_text,
+                stop_signal.is_set,
+            )
 
             result_payload = {
                 "output_text": result.output_text,
                 "tokens": [token.model_dump(mode="json") for token in result.tokens],
+                "generation": result.generation,
                 "traces": result.trace_summary,
             }
             result_path = self.artifacts.write_json(run_id, "result.json", result_payload)
@@ -155,6 +183,21 @@ class RunCoordinator:
                     EventType.TRACE_READY,
                     {"artifacts": artifact_names},
                 )
+
+            if stop_signal.is_set():
+                record = await asyncio.to_thread(
+                    self.repository.update_run,
+                    run_id,
+                    RunStatus.CANCELLED,
+                    output_text=result.output_text,
+                    tokens_generated=len(result.tokens),
+                )
+                await self.events.publish(
+                    run_id,
+                    EventType.RUN_CANCELLED,
+                    {"tokens_generated": record.tokens_generated, "artifacts": artifact_names},
+                )
+                return
 
             record = await asyncio.to_thread(
                 self.repository.update_run,
@@ -172,6 +215,19 @@ class RunCoordinator:
                 },
             )
         except Exception as error:
+            if stop_signal.is_set():
+                await asyncio.to_thread(
+                    self.repository.update_run,
+                    run_id,
+                    RunStatus.CANCELLED,
+                    error=str(error),
+                )
+                await self.events.publish(
+                    run_id,
+                    EventType.RUN_CANCELLED,
+                    {"message": "Run stopped"},
+                )
+                return
             await asyncio.to_thread(
                 self.repository.update_run,
                 run_id,

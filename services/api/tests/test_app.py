@@ -22,12 +22,33 @@ class FakeRuntime:
         )
 
     def generate(
-        self, request: CreateRunRequest, on_text: Callable[[str], None]
+        self,
+        request: CreateRunRequest,
+        on_text: Callable[[str], None],
+        should_stop: Callable[[], bool] | None = None,
     ) -> GenerationResult:
         on_text("workspace")
         return GenerationResult(
             output_text="workspace",
             tokens=[TokenTrace(index=0, token_id=1, text="workspace", logprob=-0.1)],
+        )
+
+
+class StoppableRuntime(FakeRuntime):
+    def generate(
+        self,
+        request: CreateRunRequest,
+        on_text: Callable[[str], None],
+        should_stop: Callable[[], bool] | None = None,
+    ) -> GenerationResult:
+        for _ in range(200):
+            if should_stop and should_stop():
+                break
+            sleep(0.005)
+        on_text("partial")
+        return GenerationResult(
+            output_text="partial",
+            tokens=[TokenTrace(index=0, token_id=1, text="partial")],
         )
 
 
@@ -77,3 +98,46 @@ def test_run_completes_and_emits_events(tmp_path: Path) -> None:
         "token.generated",
         "run.completed",
     ]
+
+
+def test_completed_run_and_artifacts_can_be_deleted(tmp_path: Path) -> None:
+    configured = settings(tmp_path)
+    with TestClient(create_app(configured, FakeRuntime())) as client:
+        created = client.post("/api/v1/runs", json={"prompt": "Delete this"})
+        run_id = created.json()["id"]
+        for _ in range(50):
+            record = client.get(f"/api/v1/runs/{run_id}").json()
+            if record["status"] == "completed":
+                break
+            sleep(0.01)
+
+        assert (configured.data_dir / run_id / "result.json").is_file()
+        deleted = client.delete(f"/api/v1/runs/{run_id}")
+
+        assert deleted.status_code == 200
+        assert deleted.json() == {"id": run_id, "deleted": True}
+        assert client.get(f"/api/v1/runs/{run_id}").status_code == 404
+        assert not (configured.data_dir / run_id).exists()
+
+
+def test_running_run_can_be_stopped_before_deletion(tmp_path: Path) -> None:
+    with TestClient(create_app(settings(tmp_path), StoppableRuntime())) as client:
+        created = client.post("/api/v1/runs", json={"prompt": "Keep going"})
+        run_id = created.json()["id"]
+        for _ in range(50):
+            record = client.get(f"/api/v1/runs/{run_id}").json()
+            if record["status"] == "running":
+                break
+            sleep(0.01)
+
+        assert client.delete(f"/api/v1/runs/{run_id}").status_code == 409
+        stopped = client.post(f"/api/v1/runs/{run_id}/cancel")
+        for _ in range(50):
+            record = client.get(f"/api/v1/runs/{run_id}").json()
+            if record["status"] == "cancelled":
+                break
+            sleep(0.01)
+
+    assert stopped.status_code == 200
+    assert record["status"] == "cancelled"
+    assert record["output_text"] == "partial"

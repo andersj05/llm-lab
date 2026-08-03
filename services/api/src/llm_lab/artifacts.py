@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -47,3 +48,15 @@ class ArtifactStore:
         if not path.is_file() or self.data_dir.resolve() not in path.resolve().parents:
             return None
         return path
+
+    def delete_run(self, run_id: str) -> bool:
+        root = self.data_dir.resolve()
+        path = (self.data_dir / run_id).resolve()
+        if path.parent != root:
+            raise ValueError("Invalid run identifier")
+        if not path.exists():
+            return False
+        if not path.is_dir():
+            raise ValueError("Run artifact path is not a directory")
+        shutil.rmtree(path)
+        return True
